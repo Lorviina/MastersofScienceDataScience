@@ -1,0 +1,197 @@
+---
+title: "Project - NYPD data"
+author: "D. Garton"
+date: "2023-07-24"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Background
+
+The data shown in this analysis was collected from the City of New York data website. The task of this project is to create a few different R visuals and creating a model of the data. 
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Summary
+
+
+## Analysis
+
+### Data Loading
+The data has been loaded from the following website: https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD
+
+A head of the data is shown below in Table 1.
+
+Table 1. Header of the CSV NYPD Shootings data.
+```{r Table 1 Header CSV Data, echo = FALSE}
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+library(tidyverse)
+nypd_data <- read.csv(url)
+head(nypd_data, 10)
+```
+
+### Yearly Shootings
+
+Add columns for Year and Month. From 2006 til 2019 the number of shooting incidents recorded was decreasing and have spiked since 2020. 
+```{r Add Columns, echo = TRUE}
+#alter OCCUR_Date column to date format
+nypd_data$OCCUR_DATE <- mdy(nypd_data$OCCUR_DATE)
+
+#add year column
+nypd_data$year <- year(nypd_data$OCCUR_DATE)
+#add month column
+nypd_data$month <- month(nypd_data$OCCUR_DATE)
+
+
+#generate a bar chart of incidents per year/month
+#summarise by Year
+nypd_data_year <- nypd_data %>%
+    group_by(year) %>%
+    summarize(shootings = n()) %>%
+    ungroup()
+#create bar chart
+barchart_year <- ggplot(data = nypd_data_year, aes(x = year, y = shootings)) +
+  geom_bar(stat="identity")
+barchart_year
+```
+
+### Which Precinct has the most incidents?
+To investigate how the incidents occur with respect to each precinct. I have acquired a geospatial map of the NY precincts from GitHub. "https://github.com/ResidentMario/geoplot-data/blob/master/nyc-police-precincts.geojson"
+
+```{r SpatialMap, echo = TRUE}
+library(rgeos)
+library(maptools)
+library(geojsonio)
+library(ggplot2)
+
+#I saved the file into my documents as it made it easier to load
+fil <- "nyc-police-precincts.geojson"
+nyc_precincts_map <- geojson_read(fil, what="sp")
+#nyc_precincts_map@data
+
+#use sp library to plot the map
+library(sp)
+par(mar=c(0,0,0,0))
+plot(nyc_precincts_map, col="grey")
+
+#Join the incident totals per year into the @data field of the map
+names(nypd_data)[6] = "precinct" #change name to match for join
+nypd_data_precinct_tot <- nypd_data %>%
+    group_by(precinct) %>%
+    summarize(shootings = n()) %>%
+    ungroup()
+#nypd_data_precinct_tot
+
+nyc_precincts_map@data$precinct <- as.numeric(nyc_precincts_map@data$precinct) #alter precinct column type to integer in nyc_precincts_map@data
+nyc_precincts_map@data <- left_join(nypd_data_precinct_tot, nyc_precincts_map@data, by = "precinct")
+
+#load viridis colour palette as we are using continuous data. Purple = highest, yellow = lowest
+library(viridis)
+my_colours = viridis(length(nyc_precincts_map@data))
+my_colours
+
+plot(nyc_precincts_map, col = my_colours)
+
+```
+
+
+### Average Shooting incidents per Year plot
+Does the plot look different for the average number of incidents?
+```{r medianplot, echo = TRUE}
+precinct_ave <- nypd_data %>%
+    group_by(year, precinct) %>%
+    summarize(shootings = n()) %>%
+    ungroup()
+#precinct_ave
+
+precinct_ave2 <- precinct_ave %>%
+    group_by(precinct) %>%
+    summarize(mean_inci = mean(shootings)) %>%
+    ungroup()
+
+nyc_precincts_median_map <- geojson_read(fil, what="sp")
+#nyc_precincts_median_map@data
+nyc_precincts_median_map@data$precinct <- as.numeric(nyc_precincts_median_map@data$precinct)
+nyc_precincts_median_map@data <- left_join(precinct_ave2, nyc_precincts_median_map@data, by = "precinct")
+
+plot(nyc_precincts_median_map, col = my_colours)
+```
+
+### Modelling
+Number of murders per shootings in the PRECINCT
+```{r Modelling, echo = TRUE}
+nypd_data$murder <- ifelse(nypd_data$STATISTICAL_MURDER_FLAG == "true", 1, 0)
+#nypd_data
+
+modelling_tbl <- nypd_data %>%
+    group_by(year) %>%
+    summarize(shootings = n()) %>%
+    ungroup()
+modelling_tbl2 <- nypd_data %>%
+    group_by(year) %>%
+    summarize(murder = sum(murder)) %>%
+    ungroup()
+modelling_tbl2
+
+#add a column to change Male perp to 1, or 0
+nypd_data$perp_male <- ifelse(nypd_data$PERP_SEX == "M", 1, 0)
+modelling_tbl_males <- nypd_data %>%
+  group_by(year) %>%
+  summarise(male_perp = sum(perp_male)) %>%
+  ungroup()
+
+#join male perp table with modelling table 3
+modelling_tbl3 <- left_join(modelling_tbl,modelling_tbl2, by = "year")
+#modelling_tbl3
+
+modelling_tbl3$murders_per_incidents <- modelling_tbl3$murder / modelling_tbl3$shootings
+
+#join male perp data to modelling table 3
+modelling_tbl3 <- left_join(modelling_tbl3,modelling_tbl_males, by = "year")
+
+modelling_tbl3$male_perp_per_incident <- modelling_tbl3$male_perp / modelling_tbl3$shootings
+#modelling_tbl3
+#plot male_perp_per_incident versus murders_per_incident
+# modelling_tbl3 %>% ggplot() +
+#   geom_point(aes(x = murders_per_incidents, y = male_perp_per_incident), color = "blue")
+# modelling_tbl3
+
+#create a simple linear model of male perps per shootings
+
+mod <- lm(male_perp ~ shootings, data = modelling_tbl3)
+
+
+modelling_tbl4 <- modelling_tbl3 %>% mutate(pred = predict(mod))
+#plot model versus data
+modelling_tbl4 %>% ggplot() +
+  geom_point(aes(x = shootings, y = male_perp), color = "blue") +
+  geom_point(aes(x = shootings, y = pred), color = "red")
+
+#assessing the hour of the incident, does the timing of the incident have a pattern?
+nypd_data <- mutate(nypd_data, OCCUR_TIME=hms(OCCUR_TIME))
+class(nypd_data$OCCUR_TIME)
+nypd_data$hour <- hour(nypd_data$OCCUR_TIME)
+dfhours <- nypd_data %>% count(hour)
+dfhours
+names(dfhours)[names(dfhours) == "hour"] <- "hourofincident"
+names(dfhours)[names(dfhours) == "n"] <- "countofincidents"
+dfhours$hourofincident <- as.numeric(unlist(dfhours$hourofincident))
+ggplot(data = dfhours, aes(x = hourofincident, y = countofincidents)) +
+  geom_bar(stat = "identity")
+```
+
+
+### Conclusion
+There is no pattern to the overall shooting incidents or the average shootings incidents from 2006 to 2022. We have seen a decreasing pattern of shooting incidents from 2006 to 2019 with a high spike in 2020, 2021, and 2022. Some possible sources of bias from me maybe that I am from England and not the US, I am male and white, and I am 25+ years of age. I have mitigated this by first analysing if there is a spatial pattern within the data and to mitigate any bias from analysing the perp or vic sex data I am assuming that there is an even split in the data for both sexes, which should be first tested before completing more analyses (my bias for this would be that there are more male perps/vics due to gang violence perpetrated primarily by males).
+The number of male perpertrators is postively correlated with the number of shootings/incidents.There is no evidence from the spatial map that there is a geo-location influence to the number of shootings within New York.
+
+There is also a pattern with the time in which the incidents occur. The incidents primarily occur between 2200 and 0300, late at night, rather than during the day.
+
+### SessionInfo
+```{r SesssionInfo, echo = TRUE}
+sessionInfo()
+```
